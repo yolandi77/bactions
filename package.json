@@ -1,0 +1,23 @@
+{
+    "name": "grid-game-monorepo-example",
+    "version": "1.0.0",
+    "description": "Simple multiplayer grid game",
+    "main": "main.js",
+    "scripts": {
+      "start": "node main.js",
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+      "game",
+      "multiplayer",
+      "websockets",
+      "node",
+      "express"
+    ],
+    "author": "AI",
+    "license": "MIT",
+    "dependencies": {
+      "express": "^4.18.2", 
+      "ws": "^8.13.0"   
+    }
+  }

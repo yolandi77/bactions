@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Grid Game</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 1em;}
+        #game-map { display: grid; gap: 3px; border: 2px solid #333; margin-bottom: 15px; background-color: #777; padding: 3px; position: relative;}
+        .tile {
+            border: 1px solid #aaa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            text-align: center;
+            /* background-color: #eee; */ /* Base color set by JS */
+            box-sizing: border-box;
+            width: 45px;
+            height: 45px;
+            color: #000; /* Default text color - consider contrast */
+         }
+        .tile .soldiers { font-size: 14px; font-weight: bold; }
+        /* Make owner text slightly transparent to reduce visual noise */
+        .tile .owner { font-size: 9px; position: absolute; bottom: 2px; left: 0; right: 0; color: rgba(0,0,0,0.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px;}
+
+        /* Cursor Highlighting */
+        .tile.cursor {
+            box-shadow: 0 0 0 3px yellow inset;
+            z-index: 10;
+        }
+
+        /* Player Ownership Styles (Keep specific ones) */
+        .tile.owned-by-me { background-color: lightblue; }
+        .tile.neutral { background-color: #ddd; }
+        /* .owned-by-other rule removed - color set directly */
+
+        /* Adjust text color for better contrast on specific backgrounds */
+        .tile.owned-by-me .owner, .tile.owned-by-me .soldiers {
+            color: #113; /* Darker text on light blue */
+        }
+        .tile.neutral .owner {
+             color: #555;
+        }
+
+
+        /* UI Elements */
+        #info { margin-bottom: 10px; font-size: 16px; font-weight: bold; }
+        #instructions { margin-top: 10px; font-size: 14px; background-color: #f0f0f0; padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
+        #instructions ul { padding-left: 20px; margin: 5px 0;}
+         #messages { margin-top: 15px; font-size: 12px; color: #555; max-height: 100px; overflow-y: auto; width: 80%; border: 1px solid #eee; padding: 5px; text-align: left;}
+    </style>
+</head>
+<body>
+    <h1>Simple Grid Game</h1>
+    <div id="info">Connecting...</div>
+    <div id="game-map">Loading Map...</div>
+
+    <div id="instructions">
+        Use <b>Arrow Keys</b> to move the cursor (yellow outline).<br>
+        Press hotkeys to send soldiers to the cursor's tile from your strongest adjacent tile:
+        <ul>
+            <li><b>1</b>: Send 1 soldier</li>
+            <li><b>2</b>: Send 10 soldiers</li>
+            <li><b>3</b>: Send 100 soldiers</li>
+        </ul>
+        Owned tiles generate 1 soldier/second.
+    </div>
+
+    <div id="messages"></div>
+
+    <script>
+        const ws = new WebSocket(`ws://${window.location.host}`);
+
+        let myPlayerId = null;
+        let gameMap = [];
+        let mapWidth = 0;
+        let mapHeight = 0;
+        let cursorX = 0;
+        let cursorY = 0;
+
+        const mapElement = document.getElementById('game-map');
+        const infoElement = document.getElementById('info');
+        const messagesElement = document.getElementById('messages');
+
+        // --- Define Player Colors ---
+        const PLAYER_COLORS = [
+            '#FFADAD', // Light Red
+            '#FFD6A5', // Light Orange
+            '#FDFFB6', // Light Yellow
+            '#CAFFBF', // Light Green
+            '#9BF6FF', // Light Cyan
+            '#A0C4FF', // Light Blue (Different from 'owned-by-me')
+            '#BDB2FF', // Light Purple
+            '#FFC6FF', // Light Magenta
+            '#E0BBE4', // Lavender
+            '#FFDAC1', // Peach
+            '#FFFFD1', // Pale Yellow
+            '#D5F7D7', // Mint Green
+        ];
+
+        // --- Logging ---
+        function logMessage(msg, type = 'info') {
+             console[type === 'error' ? 'error' : 'log'](msg);
+             const msgDiv = document.createElement('div');
+             msgDiv.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+             if (type === 'error') msgDiv.style.color = 'red';
+             if (type === 'warn') msgDiv.style.color = 'darkorange'; // Changed from orange
+             messagesElement.insertBefore(msgDiv, messagesElement.firstChild);
+             while (messagesElement.children.length > 15) {
+                 messagesElement.removeChild(messagesElement.lastChild);
+             }
+        }
+
+        // --- Get Player Color Style (Replaces getPlayerColorClass) ---
+        function getPlayerTileStyle(playerId) {
+            if (!playerId) {
+                return { className: 'neutral', color: null }; // Use class for neutral
+            }
+            if (playerId === myPlayerId) {
+                return { className: 'owned-by-me', color: null }; // Use class for self
+            }
+
+            // For other players, calculate color
+            try {
+                // Extract number part from 'player_X'
+                const playerNumberMatch = playerId.match(/_(\d+)$/);
+                if (playerNumberMatch && playerNumberMatch[1]) {
+                    const playerNumber = parseInt(playerNumberMatch[1], 10);
+                    // Cycle through colors using modulo
+                    // Player numbers start at 1, array indices at 0
+                    const colorIndex = (playerNumber - 1) % PLAYER_COLORS.length;
+                    return { className: null, color: PLAYER_COLORS[colorIndex] };
+                }
+            } catch (e) {
+                 console.error("Error parsing player ID for color:", playerId, e);
+            }
+
+            // Fallback if ID parsing fails or no number found
+            return { className: null, color: '#CCCCCC' }; // Default fallback color
+        }
+
+        // --- Rendering ---
+        function renderMap() {
+            if (!mapElement) return;
+
+            if (!gameMap || gameMap.length === 0 || !gameMap[0]) {
+                 mapElement.innerHTML = 'Waiting for valid map data...';
+                 return;
+            }
+            mapElement.innerHTML = '';
+
+            mapHeight = gameMap.length;
+            mapWidth = gameMap[0].length;
+            mapElement.style.gridTemplateColumns = `repeat(${mapWidth}, 45px)`;
+            mapElement.style.gridTemplateRows = `repeat(${mapHeight}, 45px)`;
+
+            for (let y = 0; y < mapHeight; y++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    const tileData = gameMap[y][x];
+                    if (!tileData) continue;
+
+                    const tile = document.createElement('div');
+                    tile.classList.add('tile');
+                    tile.dataset.x = x;
+                    tile.dataset.y = y;
+
+                    // Soldiers and Owner Display
+                    const soldiersSpan = document.createElement('span');
+                    soldiersSpan.classList.add('soldiers');
+                    soldiersSpan.textContent = tileData.soldiers;
+                    tile.appendChild(soldiersSpan);
+
+                    const ownerSpan = document.createElement('span');
+                    ownerSpan.classList.add('owner');
+                    ownerSpan.textContent = tileData.owner ? tileData.owner.substring(0, 8) : 'Neutral';
+                    tile.appendChild(ownerSpan);
+
+                    // --- Apply Color Styling ---
+                    const tileStyle = getPlayerTileStyle(tileData.owner);
+                    // Clear potentially conflicting classes first
+                    tile.classList.remove('neutral', 'owned-by-me');
+                    if (tileStyle.className) {
+                        // Apply specific class (neutral or owned-by-me)
+                        tile.classList.add(tileStyle.className);
+                        tile.style.backgroundColor = ''; // Clear direct style if class is used
+                    } else if (tileStyle.color) {
+                        // Apply calculated background color directly
+                        tile.style.backgroundColor = tileStyle.color;
+                    } else {
+                         tile.style.backgroundColor = '#eee'; // Fallback just in case
+                    }
+                    // --- End Apply Color Styling ---
+
+                    // Cursor Highlighting
+                    tile.classList.remove('cursor');
+                    if (x === cursorX && y === cursorY) {
+                        tile.classList.add('cursor');
+                    }
+
+                    // Click sets cursor
+                    tile.addEventListener('click', () => {
+                        cursorX = x;
+                        cursorY = y;
+                        // logMessage(`Cursor moved to (${cursorX}, ${cursorY})`); // Optional logging
+                        renderMap();
+                    });
+
+                    mapElement.appendChild(tile);
+                }
+            }
+             // Optional: update info display
+             // infoElement.textContent = `Connected as: ${myPlayerId} | Cursor: (${cursorX}, ${cursorY})`;
+        }
+
+        // --- Input Handling (No changes needed here) ---
+        function handleKeyDown(event) {
+            if (!myPlayerId || !gameMap || gameMap.length === 0) return;
+
+            let newCursorX = cursorX;
+            let newCursorY = cursorY;
+            let moved = false;
+            let amountToSend = 0;
+
+            switch (event.key) {
+                case 'ArrowUp':
+                    newCursorY = Math.max(0, cursorY - 1);
+                    moved = true;
+                    break;
+                case 'ArrowDown':
+                    newCursorY = Math.min(mapHeight - 1, cursorY + 1);
+                    moved = true;
+                    break;
+                case 'ArrowLeft':
+                    newCursorX = Math.max(0, cursorX - 1);
+                    moved = true;
+                    break;
+                case 'ArrowRight':
+                    newCursorX = Math.min(mapWidth - 1, cursorX + 1);
+                    moved = true;
+                    break;
+                case '1':
+                    amountToSend = 1;
+                    break;
+                case '2':
+                    amountToSend = 10;
+                    break;
+                case '3':
+                    amountToSend = 100;
+                    break;
+                default:
+                    return;
+            }
+
+            event.preventDefault();
+
+            if (moved) {
+                cursorX = newCursorX;
+                cursorY = newCursorY;
+                renderMap();
+            }
+
+            if (amountToSend > 0) {
+                sendAction(cursorX, cursorY, amountToSend);
+            }
+        }
+
+        // --- Sending Actions (No changes needed here) ---
+        function sendAction(targetX, targetY, soldiers) {
+            if (!myPlayerId || ws.readyState !== WebSocket.OPEN) {
+                logMessage("Cannot send action: Not connected.", "error");
+                return;
+            }
+
+            const target = { x: targetX, y: targetY };
+            logMessage(`Sending action: ${soldiers} soldiers to (${target.x}, ${target.y})`);
+
+            ws.send(JSON.stringify({
+                type: 'executeAction',
+                payload: {
+                    target: target,
+                    soldiers: soldiers
+                }
+            }));
+        }
+
+        // --- Setup Input Listener (No changes needed here) ---
+        document.addEventListener('keydown', handleKeyDown);
+
+
+        // --- WebSocket Event Listeners (No changes needed here) ---
+        ws.onopen = () => {
+            console.log('WebSocket connection established');
+            infoElement.textContent = 'Connected. Waiting for game state...';
+            logMessage('Connected to server.');
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+
+                switch (message.type) {
+                    case 'initialState':
+                        myPlayerId = message.payload.playerId;
+                        gameMap = message.payload.map;
+                        mapHeight = gameMap.length;
+                        mapWidth = gameMap[0]?.length || 0;
+                        cursorX = Math.floor(mapWidth / 2);
+                        cursorY = Math.floor(mapHeight / 2);
+                        infoElement.textContent = `Connected as: ${myPlayerId}`;
+                        logMessage(`Received initial state. You are ${myPlayerId}`);
+                        renderMap();
+                        break;
+                    case 'mapUpdate':
+                        gameMap = message.payload;
+                        renderMap();
+                        break;
+                    case 'playerJoined':
+                        logMessage(`Player ${message.payload.playerId} joined the game.`);
+                        break;
+                    case 'playerLeft':
+                        logMessage(`Player ${message.payload.playerId} left the game.`);
+                        break;
+                     case 'error':
+                         logMessage(`Server error: ${message.payload}`, 'error');
+                         break;
+                    default:
+                        logMessage(`Unknown message type received: ${message.type}`, 'warn');
+                }
+            } catch (error) {
+                console.error('Failed to parse message from server:', event.data, error);
+                logMessage('Received invalid message from server.', 'error');
+            }
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+            infoElement.textContent = 'Disconnected from server.';
+            logMessage('Disconnected from server.', 'warn');
+            myPlayerId = null;
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            infoElement.textContent = 'Connection error.';
+            logMessage('WebSocket connection error.', 'error');
+        };
+
+    </script>
+</body>
+</html>
