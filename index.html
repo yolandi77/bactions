@@ -40,8 +40,20 @@
         }
 
         #info { margin-bottom: 10px; font-size: 16px; font-weight: bold; }
-        #instructions { margin-top: 10px; font-size: 14px; background-color: #f0f0f0; padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
-        #instructions ul { padding-left: 20px; margin: 5px 0;}
+        /* Combined controls/instructions area */
+        #controls-instructions {
+            margin-top: 10px;
+            font-size: 14px;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            text-align: center; /* Center button container */
+        }
+        #controls-instructions ul { padding-left: 20px; margin: 5px 0; text-align: left; display: inline-block;} /* Align list text left */
+        #action-buttons { margin-top: 10px; }
+        #action-buttons button { margin: 0 5px; padding: 5px 10px; font-size: 14px; cursor: pointer;}
+
          #messages { margin-top: 15px; font-size: 12px; color: #555; max-height: 100px; overflow-y: auto; width: 80%; border: 1px solid #eee; padding: 5px; text-align: left;}
     </style>
 </head>
@@ -50,26 +62,32 @@
     <div id="info">Connecting...</div>
     <div id="game-map">Loading Map...</div>
 
-    <div id="instructions">
+    <!-- Combined controls and instructions -->
+    <div id="controls-instructions">
         Use <b>Arrow Keys</b> to move the cursor (yellow outline).<br>
-        Press hotkeys to send soldiers to the cursor's tile from your strongest adjacent tile:
+        Press hotkeys or click buttons to send soldiers to the cursor's tile from your strongest adjacent tile:
         <ul>
-            <li><b>1</b>: Send 1 soldier</li>
-            <li><b>2</b>: Send 10 soldiers</li>
-            <li><b>3</b>: Send 100 soldiers</li>
+            <li><b>Key 1</b> / <button id="send-1">Send 1</button></li>
+            <li><b>Key 2</b> / <button id="send-10">Send 10</button></li>
+            <li><b>Key 3</b> / <button id="send-100">Send 100</button></li>
         </ul>
         Owned tiles generate 1 soldier/second.
+        <!-- Buttons could also be placed outside the list -->
+        <!--
+        <div id="action-buttons">
+            <button id="send-1-alt">Send 1</button>
+            <button id="send-10-alt">Send 10</button>
+            <button id="send-100-alt">Send 100</button>
+        </div>
+        -->
     </div>
+
 
     <div id="messages"></div>
 
     <script>
-        // --- Determine WebSocket Protocol --- <<< MODIFICATION START
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // --- Connect using determined protocol ---
         const ws = new WebSocket(`${protocol}//${window.location.host}`);
-        // <<< MODIFICATION END
-
 
         let myPlayerId = null;
         let gameMap = [];
@@ -81,6 +99,11 @@
         const mapElement = document.getElementById('game-map');
         const infoElement = document.getElementById('info');
         const messagesElement = document.getElementById('messages');
+        // --- Button References --- <<< ADDED
+        const send1Button = document.getElementById('send-1');
+        const send10Button = document.getElementById('send-10');
+        const send100Button = document.getElementById('send-100');
+
 
         const PLAYER_COLORS = [
             '#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF',
@@ -100,13 +123,8 @@
         }
 
         function getPlayerTileStyle(playerId) {
-            if (!playerId) {
-                return { className: 'neutral', color: null };
-            }
-            if (playerId === myPlayerId) {
-                return { className: 'owned-by-me', color: null };
-            }
-
+            if (!playerId) return { className: 'neutral', color: null };
+            if (playerId === myPlayerId) return { className: 'owned-by-me', color: null };
             try {
                 const playerNumberMatch = playerId.match(/_(\d+)$/);
                 if (playerNumberMatch && playerNumberMatch[1]) {
@@ -114,18 +132,14 @@
                     const colorIndex = (playerNumber - 1) % PLAYER_COLORS.length;
                     return { className: null, color: PLAYER_COLORS[colorIndex] };
                 }
-            } catch (e) {
-                 console.error("Error parsing player ID for color:", playerId, e);
-            }
-            return { className: null, color: '#CCCCCC' }; // Fallback
+            } catch (e) { console.error("Error parsing player ID for color:", playerId, e); }
+            return { className: null, color: '#CCCCCC' };
         }
 
         function renderMap() {
             if (!mapElement) return;
-
             if (!gameMap || gameMap.length === 0 || !gameMap[0]) {
-                 mapElement.innerHTML = 'Waiting for valid map data...';
-                 return;
+                 mapElement.innerHTML = 'Waiting for valid map data...'; return;
             }
             mapElement.innerHTML = '';
 
@@ -190,33 +204,14 @@
             let amountToSend = 0;
 
             switch (event.key) {
-                case 'ArrowUp':
-                    newCursorY = Math.max(0, cursorY - 1);
-                    moved = true;
-                    break;
-                case 'ArrowDown':
-                    newCursorY = Math.min(mapHeight - 1, cursorY + 1);
-                    moved = true;
-                    break;
-                case 'ArrowLeft':
-                    newCursorX = Math.max(0, cursorX - 1);
-                    moved = true;
-                    break;
-                case 'ArrowRight':
-                    newCursorX = Math.min(mapWidth - 1, cursorX + 1);
-                    moved = true;
-                    break;
-                case '1':
-                    amountToSend = 1;
-                    break;
-                case '2':
-                    amountToSend = 10;
-                    break;
-                case '3':
-                    amountToSend = 100;
-                    break;
-                default:
-                    return;
+                case 'ArrowUp': newCursorY = Math.max(0, cursorY - 1); moved = true; break;
+                case 'ArrowDown': newCursorY = Math.min(mapHeight - 1, cursorY + 1); moved = true; break;
+                case 'ArrowLeft': newCursorX = Math.max(0, cursorX - 1); moved = true; break;
+                case 'ArrowRight': newCursorX = Math.min(mapWidth - 1, cursorX + 1); moved = true; break;
+                case '1': amountToSend = 1; break;
+                case '2': amountToSend = 10; break;
+                case '3': amountToSend = 100; break;
+                default: return;
             }
 
             event.preventDefault();
@@ -243,15 +238,26 @@
 
             ws.send(JSON.stringify({
                 type: 'executeAction',
-                payload: {
-                    target: target,
-                    soldiers: soldiers
-                }
+                payload: { target: target, soldiers: soldiers }
             }));
         }
 
+        // --- Setup Input Listeners ---
         document.addEventListener('keydown', handleKeyDown);
 
+        // --- Button Click Listeners --- <<< ADDED
+        send1Button.addEventListener('click', () => {
+            if (myPlayerId) sendAction(cursorX, cursorY, 1);
+        });
+        send10Button.addEventListener('click', () => {
+             if (myPlayerId) sendAction(cursorX, cursorY, 10);
+        });
+        send100Button.addEventListener('click', () => {
+             if (myPlayerId) sendAction(cursorX, cursorY, 100);
+        });
+
+
+        // --- WebSocket Event Listeners (No changes needed here) ---
         ws.onopen = () => {
             console.log('WebSocket connection established');
             infoElement.textContent = 'Connected. Waiting for game state...';
@@ -307,10 +313,7 @@
             console.error('WebSocket error:', error);
             infoElement.textContent = 'Connection error.';
             logMessage('WebSocket connection error.', 'error');
-            // The DOMException might also be logged here by the browser
             if (error instanceof Event && error.target instanceof WebSocket) {
-                 // Check if it looks like a security error
-                 // Note: Specific error details might not be exposed directly to JS
                  if (error.target.readyState === WebSocket.CLOSED) {
                      logMessage("Connection failed. If using HTTPS, ensure WebSocket uses WSS.", "error");
                  }
