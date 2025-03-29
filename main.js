@@ -112,13 +112,18 @@ function broadcast(data) {
 
 function broadcastMapUpdate() {
     const displayNamesObject = Object.fromEntries(playerDisplayNames);
-    broadcast({
-        type: 'mapUpdate',
-        payload: {
-            map: map,
-            displayNames: displayNamesObject
-        }
-    });
+    // Only broadcast if there are players to receive it
+    if (activePlayerConnections.size > 0) {
+        broadcast({
+            type: 'mapUpdate',
+            payload: {
+                map: map,
+                displayNames: displayNamesObject
+            }
+        });
+    } else {
+        // console.log("Skipping map broadcast: No players connected.");
+    }
 }
 
 function handleActionOnTile(playerId, ws, actionData) {
@@ -236,7 +241,7 @@ function gameTick() {
 
 function startGameLoop() {
     if (mainGameLoopIntervalHandle) {
-        console.log("Game loop already running.");
+        // console.log("Game loop already running."); // Less verbose
         return;
     }
     console.log(`Starting main game loop (Tick Rate: ${SERVER_TICK_RATE_MS}ms)`);
@@ -244,6 +249,7 @@ function startGameLoop() {
     mainGameLoopIntervalHandle = setInterval(gameTick, SERVER_TICK_RATE_MS);
 }
 
+// Function remains but is no longer called automatically
 function stopGameLoop() {
     if (mainGameLoopIntervalHandle) {
         clearInterval(mainGameLoopIntervalHandle);
@@ -266,54 +272,40 @@ wss.on('connection', (ws, req) => {
                 if (!receivedPlayerId || typeof receivedPlayerId !== 'string' || receivedPlayerId.length < 5) {
                     console.error("Invalid player ID received for identification:", receivedPlayerId);
                     ws.send(JSON.stringify({ type: 'error', payload: 'Invalid identification attempt.' }));
-                    ws.terminate();
-                    return;
+                    ws.terminate(); return;
                 }
-                if (currentPlayerId) {
-                    console.warn(`Connection already identified as ${currentPlayerId}, ignoring identify attempt for ${receivedPlayerId}`);
-                    return;
-                }
+                if (currentPlayerId) { console.warn(`Connection already identified as ${currentPlayerId}`); return; }
                 if (activePlayerConnections.has(receivedPlayerId)) {
                     console.warn(`Player ${receivedPlayerId} is already connected. Terminating new connection.`);
                     ws.send(JSON.stringify({ type: 'error', payload: 'You are already connected in another window/tab.' }));
-                    ws.terminate();
-                    return;
+                    ws.terminate(); return;
                 }
 
                 console.log(`Identifying connection as Player ${receivedPlayerId}`);
                 players.set(ws, { playerId: receivedPlayerId });
                 activePlayerConnections.set(receivedPlayerId, ws);
 
-                if (!playerDisplayNames.has(receivedPlayerId)) {
-                     playerDisplayNames.set(receivedPlayerId, receivedPlayerId);
-                }
+                if (!playerDisplayNames.has(receivedPlayerId)) { playerDisplayNames.set(receivedPlayerId, receivedPlayerId); }
 
                 const assigned = assignStartingTile(receivedPlayerId);
                 if (!assigned) {
-                     console.error(`Failed to assign starting tile for ${receivedPlayerId}. Disconnecting.`);
-                     ws.send(JSON.stringify({ type: 'error', payload: 'Could not find a starting position on the map.' }));
-                     ws.terminate();
-                     return;
+                    console.error(`Failed to assign starting tile for ${receivedPlayerId}. Disconnecting.`);
+                    ws.send(JSON.stringify({ type: 'error', payload: 'Could not find a starting position on the map.' }));
+                    ws.terminate(); return;
                 }
 
                 ws.send(JSON.stringify({
                     type: 'initialState',
-                    payload: {
-                        playerId: receivedPlayerId,
-                        map: map,
-                        displayNames: Object.fromEntries(playerDisplayNames)
-                    }
+                    payload: { playerId: receivedPlayerId, map: map, displayNames: Object.fromEntries(playerDisplayNames) }
                 }));
 
                 broadcast({ type: 'playerJoined', payload: { playerId: receivedPlayerId, displayName: playerDisplayNames.get(receivedPlayerId) } });
-                if (!mainGameLoopIntervalHandle && activePlayerConnections.size > 0) { startGameLoop(); }
+                // Start loop if not already running
+                if (!mainGameLoopIntervalHandle) { startGameLoop(); }
                 return;
             }
 
-            if (!currentPlayerId) {
-                console.warn("Received non-identify message before player was identified. Ignoring.");
-                return;
-            }
+            if (!currentPlayerId) { console.warn("Received non-identify message before identified."); return; }
 
             console.log(`Received from ${playerDisplayNames.get(currentPlayerId) || currentPlayerId}: ${JSON.stringify(parsedMessage.type)}`);
             switch (parsedMessage.type) {
@@ -344,7 +336,7 @@ wss.on('connection', (ws, req) => {
             activePlayerConnections.delete(closedPlayerId);
             broadcast({ type: 'playerLeft', payload: { playerId: closedPlayerId } });
             console.log(`Total active players: ${activePlayerConnections.size}`);
-            if (activePlayerConnections.size === 0 && mainGameLoopIntervalHandle) { stopGameLoop(); }
+            // REMOVED: if (activePlayerConnections.size === 0 && mainGameLoopIntervalHandle) { stopGameLoop(); }
         } else { console.log("Unidentified player disconnected."); }
     });
 
@@ -354,9 +346,12 @@ wss.on('connection', (ws, req) => {
          const displayName = errorPlayerId !== 'unidentified' ? playerDisplayNames.get(errorPlayerId) : errorPlayerId;
          console.error(`WebSocket error for player ${displayName}:`, error);
          if (players.has(ws)) { players.delete(ws); }
-         if (playerData) { activePlayerConnections.delete(playerData.playerId); broadcast({ type: 'playerLeft', payload: { playerId: playerData.playerId } }); }
+         if (playerData) {
+            activePlayerConnections.delete(playerData.playerId);
+            broadcast({ type: 'playerLeft', payload: { playerId: playerData.playerId } });
+         }
          console.log(`Total active players: ${activePlayerConnections.size}`);
-         if (activePlayerConnections.size === 0 && mainGameLoopIntervalHandle) { stopGameLoop(); }
+         // REMOVED: if (activePlayerConnections.size === 0 && mainGameLoopIntervalHandle) { stopGameLoop(); }
     });
 });
 
@@ -367,11 +362,18 @@ app.get('/', (req, res) => {
 server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
     console.log(`Access the game at: http://localhost:${PORT}`);
+    // Start the game loop immediately on server start, or keep starting on first connect?
+    // Let's keep starting on first connect for now. If you want it always running:
+    // startGameLoop();
 });
 
 process.on('SIGINT', () => {
     console.log('\nServer shutting down...');
-    stopGameLoop();
+    // Loop might still be running, but we stop broadcasting/processing new things
+    if (mainGameLoopIntervalHandle) {
+        clearInterval(mainGameLoopIntervalHandle); // Ensure interval stops on shutdown
+        console.log("Stopped game loop due to shutdown.");
+    }
     wss.close(() => {
         console.log('WebSocket server closed.');
         server.close(() => {
@@ -383,5 +385,5 @@ process.on('SIGINT', () => {
     setTimeout(() => {
         console.error('Graceful shutdown timed out. Forcing exit.');
         process.exit(1);
-    }, 5000);
+    }, 500);
 });
