@@ -5,64 +5,35 @@
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 1em;}
         #game-map { display: grid; gap: 3px; border: 2px solid #333; margin-bottom: 15px; background-color: #777; padding: 3px; position: relative;}
-        .tile {
-            border: 1px solid #aaa;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            font-size: 11px;
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-            text-align: center;
-            box-sizing: border-box;
-            width: 45px;
-            height: 45px;
-            color: #000;
-         }
+        .tile { border: 1px solid #aaa; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; position: relative; overflow: hidden; text-align: center; box-sizing: border-box; width: 45px; height: 45px; color: #000; }
         .tile .soldiers { font-size: 14px; font-weight: bold; }
         .tile .owner { font-size: 9px; position: absolute; bottom: 2px; left: 0; right: 0; color: rgba(0,0,0,0.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px;}
-
-        .tile.cursor {
-            box-shadow: 0 0 0 3px yellow inset;
-            z-index: 10;
-        }
-
+        .tile.cursor { box-shadow: 0 0 0 3px yellow inset; z-index: 10; }
         .tile.owned-by-me { background-color: lightblue; }
         .tile.neutral { background-color: #ddd; }
-
-        .tile.owned-by-me .owner, .tile.owned-by-me .soldiers {
-            color: #113;
-        }
-        .tile.neutral .owner {
-             color: #555;
-        }
-
-        #info { margin-bottom: 10px; font-size: 16px; font-weight: bold; }
-        /* Combined controls/instructions area */
-        #controls-instructions {
-            margin-top: 10px;
-            font-size: 14px;
-            background-color: #f0f0f0;
-            padding: 10px;
-            border-radius: 5px;
-            border: 1px solid #ccc;
-            text-align: center; /* Center button container */
-        }
-        #controls-instructions ul { padding-left: 20px; margin: 5px 0; text-align: left; display: inline-block;} /* Align list text left */
-        #action-buttons { margin-top: 10px; }
+        .tile.owned-by-me .owner, .tile.owned-by-me .soldiers { color: #113; }
+        .tile.neutral .owner { color: #555; }
+        #info { margin-bottom: 10px; font-size: 16px; font-weight: bold; display: flex; align-items: center; gap: 15px;}
+        #name-section { display: inline-flex; align-items: center; font-size: 14px; gap: 5px;}
+        #name-section input { font-size: 14px; padding: 3px; }
+        #name-section button { font-size: 14px; padding: 3px 8px; }
+        #controls-instructions { margin-top: 10px; font-size: 14px; background-color: #f0f0f0; padding: 10px; border-radius: 5px; border: 1px solid #ccc; text-align: center; }
+        #controls-instructions ul { padding-left: 20px; margin: 5px 0; text-align: left; display: inline-block;}
         #action-buttons button { margin: 0 5px; padding: 5px 10px; font-size: 14px; cursor: pointer;}
-
-         #messages { margin-top: 15px; font-size: 12px; color: #555; max-height: 100px; overflow-y: auto; width: 80%; border: 1px solid #eee; padding: 5px; text-align: left;}
+        #messages { margin-top: 15px; font-size: 12px; color: #555; max-height: 100px; overflow-y: auto; width: 80%; border: 1px solid #eee; padding: 5px; text-align: left;}
     </style>
 </head>
 <body>
     <h1>Simple Grid Game</h1>
-    <div id="info">Connecting...</div>
-    <div id="game-map">Loading Map...</div>
+    <div id="info">
+        <span id="connection-status">Connecting...</span>
+        <div id="name-section" style="display: none;">
+             Name: <input type="text" id="display-name-input" maxlength="16">
+             <button id="set-name-button">Set</button>
+        </div>
+    </div>
 
-    <!-- Combined controls and instructions -->
+    <div id="game-map">Loading Map...</div>
     <div id="controls-instructions">
         Use <b>Arrow Keys</b> to move the cursor (yellow outline).<br>
         Press hotkeys or click buttons to send soldiers to the cursor's tile from your strongest adjacent tile:
@@ -72,43 +43,35 @@
             <li><b>Key 3</b> / <button id="send-100">Send 100</button></li>
         </ul>
         Owned tiles generate 1 soldier/second.
-        <!-- Buttons could also be placed outside the list -->
-        <!--
-        <div id="action-buttons">
-            <button id="send-1-alt">Send 1</button>
-            <button id="send-10-alt">Send 10</button>
-            <button id="send-100-alt">Send 100</button>
-        </div>
-        -->
     </div>
-
-
     <div id="messages"></div>
 
     <script>
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${protocol}//${window.location.host}`);
+        const LOCALSTORAGE_KEY = 'factionsGamePlayerId';
 
         let myPlayerId = null;
         let gameMap = [];
-        let mapWidth = 0;
-        let mapHeight = 0;
-        let cursorX = 0;
-        let cursorY = 0;
+        let currentDisplayNames = {};
+        let mapWidth = 0, mapHeight = 0;
+        let cursorX = 0, cursorY = 0;
+        let identifiedToServer = false;
 
         const mapElement = document.getElementById('game-map');
         const infoElement = document.getElementById('info');
+        const connectionStatusElement = document.getElementById('connection-status');
+        const nameSectionElement = document.getElementById('name-section');
+        const nameInputElement = document.getElementById('display-name-input');
+        const setNameButton = document.getElementById('set-name-button');
         const messagesElement = document.getElementById('messages');
-        // --- Button References --- <<< ADDED
         const send1Button = document.getElementById('send-1');
         const send10Button = document.getElementById('send-10');
         const send100Button = document.getElementById('send-100');
 
-
-        const PLAYER_COLORS = [
-            '#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF',
-            '#E0BBE4', '#FFDAC1', '#FFFFD1', '#D5F7D7',
-        ];
+        const PLAYER_COLORS = {};
+        const COLOR_PALETTE = ['#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF', '#E0BBE4', '#FFDAC1', '#FFFFD1', '#D5F7D7'];
+        let nextColorIndex = 0;
 
         function logMessage(msg, type = 'info') {
              console[type === 'error' ? 'error' : 'log'](msg);
@@ -117,30 +80,27 @@
              if (type === 'error') msgDiv.style.color = 'red';
              if (type === 'warn') msgDiv.style.color = 'darkorange';
              messagesElement.insertBefore(msgDiv, messagesElement.firstChild);
-             while (messagesElement.children.length > 15) {
-                 messagesElement.removeChild(messagesElement.lastChild);
+             while (messagesElement.children.length > 15) { messagesElement.removeChild(messagesElement.lastChild); }
+        }
+
+        function getPlayerColor(playerId) {
+            if (!PLAYER_COLORS[playerId]) {
+                 PLAYER_COLORS[playerId] = COLOR_PALETTE[nextColorIndex % COLOR_PALETTE.length];
+                 nextColorIndex++;
              }
+             return PLAYER_COLORS[playerId];
         }
 
         function getPlayerTileStyle(playerId) {
             if (!playerId) return { className: 'neutral', color: null };
             if (playerId === myPlayerId) return { className: 'owned-by-me', color: null };
-            try {
-                const playerNumberMatch = playerId.match(/_(\d+)$/);
-                if (playerNumberMatch && playerNumberMatch[1]) {
-                    const playerNumber = parseInt(playerNumberMatch[1], 10);
-                    const colorIndex = (playerNumber - 1) % PLAYER_COLORS.length;
-                    return { className: null, color: PLAYER_COLORS[colorIndex] };
-                }
-            } catch (e) { console.error("Error parsing player ID for color:", playerId, e); }
-            return { className: null, color: '#CCCCCC' };
+            const color = getPlayerColor(playerId);
+            return { className: null, color: color || '#CCCCCC' };
         }
 
         function renderMap() {
             if (!mapElement) return;
-            if (!gameMap || gameMap.length === 0 || !gameMap[0]) {
-                 mapElement.innerHTML = 'Waiting for valid map data...'; return;
-            }
+            if (!gameMap || gameMap.length === 0 || !gameMap[0]) { mapElement.innerHTML = 'Waiting...'; return; }
             mapElement.innerHTML = '';
 
             mapHeight = gameMap.length;
@@ -165,44 +125,52 @@
 
                     const ownerSpan = document.createElement('span');
                     ownerSpan.classList.add('owner');
-                    ownerSpan.textContent = tileData.owner ? tileData.owner.substring(0, 8) : 'Neutral';
+                    const ownerId = tileData.owner;
+                    const displayName = ownerId ? (currentDisplayNames[ownerId] || ownerId) : 'Neutral';
+                    ownerSpan.textContent = displayName.length > 10 ? displayName.substring(0, 8) + '...' : displayName;
+                    ownerSpan.title = ownerId ? `${displayName} (${ownerId})` : 'Neutral';
                     tile.appendChild(ownerSpan);
 
                     const tileStyle = getPlayerTileStyle(tileData.owner);
                     tile.classList.remove('neutral', 'owned-by-me');
-                    if (tileStyle.className) {
-                        tile.classList.add(tileStyle.className);
-                        tile.style.backgroundColor = '';
-                    } else if (tileStyle.color) {
-                        tile.style.backgroundColor = tileStyle.color;
-                    } else {
-                         tile.style.backgroundColor = '#eee';
-                    }
+                    if (tileStyle.className) { tile.classList.add(tileStyle.className); tile.style.backgroundColor = ''; }
+                    else if (tileStyle.color) { tile.style.backgroundColor = tileStyle.color; }
+                    else { tile.style.backgroundColor = '#eee'; }
 
                     tile.classList.remove('cursor');
-                    if (x === cursorX && y === cursorY) {
-                        tile.classList.add('cursor');
-                    }
+                    if (x === cursorX && y === cursorY) { tile.classList.add('cursor'); }
 
-                    tile.addEventListener('click', () => {
-                        cursorX = x;
-                        cursorY = y;
-                        renderMap();
-                    });
-
+                    tile.addEventListener('click', () => { cursorX = x; cursorY = y; renderMap(); });
                     mapElement.appendChild(tile);
                 }
             }
         }
 
+        function updateInfoDisplay() {
+            if (myPlayerId && currentDisplayNames) {
+                 const myName = currentDisplayNames[myPlayerId] || myPlayerId;
+                 connectionStatusElement.textContent = `Connected as: ${myName}`;
+                 connectionStatusElement.title = `Player ID: ${myPlayerId}`;
+
+                 // Only pre-fill the input if it's currently empty, to avoid overwriting user input
+                 if (nameInputElement.value === '') {
+                     // Only fill if the name isn't just the default player ID
+                     if (myName !== myPlayerId) {
+                         nameInputElement.value = myName;
+                     }
+                 }
+
+                 nameSectionElement.style.display = 'inline-flex';
+            } else {
+                 connectionStatusElement.textContent = 'Connecting...';
+                 nameSectionElement.style.display = 'none';
+                 nameInputElement.value = ''; // Clear input on disconnect
+            }
+        }
+
         function handleKeyDown(event) {
             if (!myPlayerId || !gameMap || gameMap.length === 0) return;
-
-            let newCursorX = cursorX;
-            let newCursorY = cursorY;
-            let moved = false;
-            let amountToSend = 0;
-
+            let newCursorX = cursorX, newCursorY = cursorY, moved = false, amountToSend = 0;
             switch (event.key) {
                 case 'ArrowUp': newCursorY = Math.max(0, cursorY - 1); moved = true; break;
                 case 'ArrowDown': newCursorY = Math.min(mapHeight - 1, cursorY + 1); moved = true; break;
@@ -213,82 +181,74 @@
                 case '3': amountToSend = 100; break;
                 default: return;
             }
-
             event.preventDefault();
-
-            if (moved) {
-                cursorX = newCursorX;
-                cursorY = newCursorY;
-                renderMap();
-            }
-
-            if (amountToSend > 0) {
-                sendAction(cursorX, cursorY, amountToSend);
-            }
+            if (moved) { cursorX = newCursorX; cursorY = newCursorY; renderMap(); }
+            if (amountToSend > 0) { sendAction(cursorX, cursorY, amountToSend); }
         }
 
         function sendAction(targetX, targetY, soldiers) {
-            if (!myPlayerId || ws.readyState !== WebSocket.OPEN) {
-                logMessage("Cannot send action: Not connected.", "error");
-                return;
-            }
-
+            if (!myPlayerId || ws.readyState !== WebSocket.OPEN) { logMessage("Cannot send action: Not connected.", "error"); return; }
             const target = { x: targetX, y: targetY };
             logMessage(`Sending action: ${soldiers} soldiers to (${target.x}, ${target.y})`);
-
-            ws.send(JSON.stringify({
-                type: 'executeAction',
-                payload: { target: target, soldiers: soldiers }
-            }));
+            ws.send(JSON.stringify({ type: 'executeAction', payload: { target: target, soldiers: soldiers } }));
         }
 
-        // --- Setup Input Listeners ---
         document.addEventListener('keydown', handleKeyDown);
-
-        // --- Button Click Listeners --- <<< ADDED
-        send1Button.addEventListener('click', () => {
-            if (myPlayerId) sendAction(cursorX, cursorY, 1);
+        send1Button.addEventListener('click', () => { if (myPlayerId) sendAction(cursorX, cursorY, 1); });
+        send10Button.addEventListener('click', () => { if (myPlayerId) sendAction(cursorX, cursorY, 10); });
+        send100Button.addEventListener('click', () => { if (myPlayerId) sendAction(cursorX, cursorY, 100); });
+        setNameButton.addEventListener('click', () => {
+            if (!myPlayerId || ws.readyState !== WebSocket.OPEN) { logMessage("Cannot set name: Not connected.", "warn"); return; }
+            const newName = nameInputElement.value;
+            if (!newName) { logMessage("Please enter a display name.", "warn"); return; }
+            logMessage(`Sending request to set name to: ${newName}`);
+            ws.send(JSON.stringify({ type: 'setDisplayName', payload: { name: newName } }));
         });
-        send10Button.addEventListener('click', () => {
-             if (myPlayerId) sendAction(cursorX, cursorY, 10);
-        });
-        send100Button.addEventListener('click', () => {
-             if (myPlayerId) sendAction(cursorX, cursorY, 100);
-        });
 
-
-        // --- WebSocket Event Listeners (No changes needed here) ---
         ws.onopen = () => {
             console.log('WebSocket connection established');
-            infoElement.textContent = 'Connected. Waiting for game state...';
-            logMessage('Connected to server.');
+            logMessage('Connected to server. Identifying...');
+            updateInfoDisplay();
+            let existingId = localStorage.getItem(LOCALSTORAGE_KEY);
+            let idToSend;
+            if (existingId) { idToSend = existingId; logMessage(`Found ID: ${idToSend}`); }
+            else { idToSend = `p_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`; logMessage(`Generated new ID: ${idToSend}`); try { localStorage.setItem(LOCALSTORAGE_KEY, idToSend); } catch (e) { logMessage("Failed to save ID.", "error"); } }
+            ws.send(JSON.stringify({ type: 'identifyPlayer', payload: { playerId: idToSend } }));
+            identifiedToServer = true;
         };
 
         ws.onmessage = (event) => {
             try {
                 const message = JSON.parse(event.data);
-
                 switch (message.type) {
                     case 'initialState':
                         myPlayerId = message.payload.playerId;
                         gameMap = message.payload.map;
+                        currentDisplayNames = message.payload.displayNames || {};
                         mapHeight = gameMap.length;
                         mapWidth = gameMap[0]?.length || 0;
                         cursorX = Math.floor(mapWidth / 2);
                         cursorY = Math.floor(mapHeight / 2);
-                        infoElement.textContent = `Connected as: ${myPlayerId}`;
-                        logMessage(`Received initial state. You are ${myPlayerId}`);
+                        logMessage(`Identified successfully. Your ID: ${myPlayerId}`);
+                        updateInfoDisplay();
                         renderMap();
                         break;
                     case 'mapUpdate':
-                        gameMap = message.payload;
+                        gameMap = message.payload.map;
+                        currentDisplayNames = message.payload.displayNames || {};
+                        updateInfoDisplay();
                         renderMap();
                         break;
                     case 'playerJoined':
-                        logMessage(`Player ${message.payload.playerId} joined the game.`);
+                        currentDisplayNames[message.payload.playerId] = message.payload.displayName || message.payload.playerId;
+                        logMessage(`Player ${currentDisplayNames[message.payload.playerId]} joined.`);
+                        getPlayerColor(message.payload.playerId);
+                         renderMap();
                         break;
                     case 'playerLeft':
-                        logMessage(`Player ${message.payload.playerId} left the game.`);
+                         const leftName = currentDisplayNames[message.payload.playerId] || message.payload.playerId;
+                         logMessage(`Player ${leftName} left.`);
+                         renderMap();
                         break;
                      case 'error':
                          logMessage(`Server error: ${message.payload}`, 'error');
@@ -297,27 +257,24 @@
                         logMessage(`Unknown message type received: ${message.type}`, 'warn');
                 }
             } catch (error) {
-                console.error('Failed to parse message from server:', event.data, error);
-                logMessage('Received invalid message from server.', 'error');
+                 console.error('Failed to parse message from server:', event.data, error);
+                 logMessage('Received invalid message from server.', 'error');
             }
         };
 
         ws.onclose = () => {
             console.log('WebSocket connection closed');
-            infoElement.textContent = 'Disconnected from server.';
-            logMessage('Disconnected from server.', 'warn');
             myPlayerId = null;
+            identifiedToServer = false;
+            updateInfoDisplay();
+            logMessage('Disconnected from server.', 'warn');
         };
 
         ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            infoElement.textContent = 'Connection error.';
-            logMessage('WebSocket connection error.', 'error');
-            if (error instanceof Event && error.target instanceof WebSocket) {
-                 if (error.target.readyState === WebSocket.CLOSED) {
-                     logMessage("Connection failed. If using HTTPS, ensure WebSocket uses WSS.", "error");
-                 }
-            }
+             console.error('WebSocket error:', error);
+             updateInfoDisplay();
+             logMessage('WebSocket connection error.', 'error');
+             if (error instanceof Event && error.target instanceof WebSocket) { if (error.target.readyState === WebSocket.CLOSED) { logMessage("Connection failed.", "error"); } }
         };
 
     </script>
